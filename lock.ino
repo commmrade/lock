@@ -23,6 +23,7 @@ void setup() {
     mfrc.PCD_DumpVersionToSerial(); // Dump all the stuff i dotn care about
 
     // Pins for LEDs
+    // Set those as OUTPUTs
     DDRD |= (1 << UNLOCKED_PIN) | (1 << LOCKED_PIN);
 }
 
@@ -49,7 +50,9 @@ void loop() {
     bool is_unlocked = try_unlock();
     int selected_pin = is_unlocked ? UNLOCKED_PIN : LOCKED_PIN;
     
+    // set to HIGH
     PORTD |= (1 << selected_pin);
     delay(1000);
+    // Set to LOW
     PORTD &= ~(1 << selected_pin);
 }
