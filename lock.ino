@@ -1,8 +1,8 @@
 #include "MFRC522.h"
 #include <string.h>
 
-constexpr int SS_PIN = 3;
-constexpr int RST_PIN = 8; 
+constexpr int SS_PIN = 10;
+constexpr int RST_PIN = 9; 
 
 constexpr int UNLOCKED_PIN = 2;
 constexpr int LOCKED_PIN = 4;
@@ -25,11 +25,14 @@ void setup() {
 
 bool card_available() {
     if (!mfrc.PICC_IsNewCardPresent()) { // Does a REQ to check if there is a card available
+        // Serial.println("Not present");
         return false;
     }
     if (!mfrc.PICC_ReadCardSerial()) { // Reads UID into an internal buffer
+        // Serial.println("Can't read UID");
         return false;
     }
+    return true;
 }
 
 bool try_unlock() {
@@ -44,6 +47,8 @@ void loop() {
     
     bool is_unlocked = try_unlock();
     int selected_pin = is_unlocked ? UNLOCKED_PIN : LOCKED_PIN;
+
+    Serial.println("fuck");
 
     digitalWrite(selected_pin, HIGH);
     delay(1000);
