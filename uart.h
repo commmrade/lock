@@ -7,9 +7,11 @@ public:
     }
 
     void init(unsigned long baud_rate) {
-        const int delimeter = F_CPU / 16 / baud_rate - 1; // some magic numbers
+        // FIXME: This does not work for baud rate other than 9600
+        const int baud = F_CPU / 16 / baud_rate - 1; // some magic numbers
+        
         // Set up baud rate
-        UBRR0 |= delimeter;
+        UBRR0 |= baud;
 
         // Enable transmitter TX (pin 0)
         UCSR0B |= (1 << TXEN0) | (1 << RXEN0);

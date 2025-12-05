@@ -1,6 +1,7 @@
 #include "MFRC522.h"
 #include <string.h>
 #include "uart.h"
+#include "spi.h"
 
 constexpr int SS_PIN = 10;
 constexpr int RST_PIN = 9; 
@@ -13,11 +14,12 @@ static MFRC522 mfrc{SS_PIN, RST_PIN};
 constexpr byte VERIFIED_KEY[]{0x74, 0xE5, 0x86, 0x04};
 
 static Uart0 serial{};
+static spi spi{};
 
 void setup() {
     serial.init(9600);
- 
-    SPI.begin(); // Start SPI communication
+
+    spi.init();
     mfrc.PCD_Init(); // Protocol handshake
     delay(10); // Wait a bit so everything is r eady
     mfrc.PCD_DumpVersionToSerial(); // Dump all the stuff i dotn care about
@@ -31,9 +33,15 @@ bool card_available() {
     if (!mfrc.PICC_IsNewCardPresent()) { // Does a REQ to check if there is a card available
         return false;
     }
+
+    // int start = millis();
     if (!mfrc.PICC_ReadCardSerial()) { // Reads UID into an internal buffer
         return false;
     }
+    // int end = millis();
+    // int result = end - start;
+    // String r_str{result};
+    // serial.println(r_str);
     return true;
 }
 
@@ -50,6 +58,16 @@ void loop() {
     bool is_unlocked = try_unlock();
     int selected_pin = is_unlocked ? UNLOCKED_PIN : LOCKED_PIN;
     
+    // int start = millis();
+    // mfrc.PICC_DumpToSerial(&mfrc.uid);
+    // int end = millis();
+
+    // int result = end - start;
+    // String r_str{result};
+
+    // delay(100);
+    // serial.println(r_str);
+
     // set to HIGH
     PORTD |= (1 << selected_pin);
     delay(1000);
