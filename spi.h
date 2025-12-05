@@ -3,7 +3,7 @@ public:
     spi() = default;
     void init() {
         // SPI Enable and make this controller Master, set speed rate to Fosc / 64
-        // SPCR |= (1 << SPE) | (1 << MSTR) | (1 << SPR1);
+        SPCR |= (1 << SPE) | (1 << MSTR) | (1 << SPR1);
 
         // CPOL - SCK is low when idle, 1 - high when idle
         // CPHA - sample on start of signal, 1 - end of signal (Trailing Edge)
