@@ -18,8 +18,8 @@ static spi spi{};
 
 void setup() {
     serial.init(9600);
-
     spi.init();
+
     mfrc.PCD_Init(); // Protocol handshake
     delay(10); // Wait a bit so everything is r eady
     mfrc.PCD_DumpVersionToSerial(); // Dump all the stuff i dotn care about
@@ -38,10 +38,6 @@ bool card_available() {
     if (!mfrc.PICC_ReadCardSerial()) { // Reads UID into an internal buffer
         return false;
     }
-    // int end = millis();
-    // int result = end - start;
-    // String r_str{result};
-    // serial.println(r_str);
     return true;
 }
 
@@ -58,16 +54,6 @@ void loop() {
     bool is_unlocked = try_unlock();
     int selected_pin = is_unlocked ? UNLOCKED_PIN : LOCKED_PIN;
     
-    // int start = millis();
-    // mfrc.PICC_DumpToSerial(&mfrc.uid);
-    // int end = millis();
-
-    // int result = end - start;
-    // String r_str{result};
-
-    // delay(100);
-    // serial.println(r_str);
-
     // set to HIGH
     PORTD |= (1 << selected_pin);
     delay(1000);
