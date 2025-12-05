@@ -50,7 +50,7 @@ void loop() {
     if (!available) {
         return;
     }
-    
+
     bool is_unlocked = try_unlock();
     int selected_pin = is_unlocked ? UNLOCKED_PIN : LOCKED_PIN;
     
