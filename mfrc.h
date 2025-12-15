@@ -63,7 +63,8 @@ public:
         flush_fifo();
 
         // enable antenna
-
+        set_antenna(true);
+        
         // TODO: Parameters, antenna stuff and so on
     }
     bool is_powered() const {
