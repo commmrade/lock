@@ -3,6 +3,14 @@
 
 enum MfrcRegisters : uint8_t {
     CommandReg = 0x01,
+    FIFODataReg = 0x09,
+    FIFOLevelReg = 0x0A,
+    ModeReg = 0x11,
+    TxModeReg = 0x12,
+    RxModeReg = 0x13,
+    TxControlReg = 0x14,
+    TxASKReg = 0x15,
+    TxSelReg = 0x16,
     VersionReg = 0x37,
     TModeReg = 0x2A,
     TPrescalerReg = 0x2B,
@@ -41,6 +49,20 @@ public:
 
         // timer setup
         setup_timer();
+
+        // CRC
+        setup_crc();
+
+        // Tx
+        setup_transmission();
+
+        // Rx
+        setup_reception();
+
+        // CLear fifo and interrupt flags
+        flush_fifo();
+
+        // enable antenna
 
         // TODO: Parameters, antenna stuff and so on
     }
@@ -105,5 +127,40 @@ private:
         uint8_t resetval = 0xFF;
         write_register(TReloadRegH, resetval);
         write_register(TReloadRegL, resetval);
+    }
+
+    void setup_crc() {
+        uint8_t value = 0xA3; // PolMFin 0, CRCPreset FFFFh (11)
+        write_register(ModeReg, value);
+    }
+
+    void setup_transmission() {
+        uint8_t value = 0x88; // 106 KBD, crc enabled
+        write_register(TxModeReg, value);
+
+        uint8_t askreg_val = 0x40; // 100% ASK Modulation
+        write_register(TxASKReg, askreg_val);
+    }
+
+    void setup_reception() {
+        uint8_t value = 0x44; // 106 kbd, "receiver is deactivated after receiving a data frame"
+        write_register(RxModeReg, value);
+    }
+
+    void flush_fifo() {
+        uint8_t value = 0x80; // Flush buffer bit set
+        write_register(FIFOLevelReg, value);
+    }
+
+    void set_antenna(bool enable) {
+        if (enable) {
+            uint8_t txcontrol_val = read_register(TxControlReg);
+            txcontrol_val |= 0x03; // enable tx1 and tx2
+            write_register(TxControlReg, txcontrol_val);
+        } else {
+            uint8_t txcontrol_val = read_register(TxControlReg);
+            txcontrol_val &= ~0x03; // enable tx1 and tx2
+            write_register(TxControlReg, txcontrol_val);
+        }
     }
 };
