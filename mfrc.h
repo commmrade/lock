@@ -2,7 +2,12 @@
 #include "spi.h"
 
 enum MfrcRegisters : uint8_t {
+    CommandReg = 0x01,
     VersionReg = 0x37,
+};
+
+enum Commands : uint8_t {
+    SoftReset = 0xf,
 };
 
 class Mfrc_522 {
@@ -27,6 +32,10 @@ public:
         digitalWrite(rst_pin_, HIGH);
         delay(50); // Oscillator startup delay
 
+        // Soft reset this mf
+        write_register(MfrcRegisters::CommandReg, Commands::SoftReset);
+        delay(50); // Wait for the device to reset fully (may wanna poll here but idc)r
+
         // TODO: Parameters, antenna stuff and so on
     }
     bool is_powered() const {
@@ -49,7 +58,7 @@ private:
 
     bool is_running{false};
 
-    uint8_t read_register(MfrcRegisters reg) const {
+    [[nodiscard]] uint8_t read_register(MfrcRegisters reg) const {
         digitalWrite(ss_pin_, LOW); // poll slave
 
         spi_.start_transaction(F_CPU / 4, MSB_ORDER, MODE_0);
@@ -61,13 +70,15 @@ private:
         return result;
     }
 
-    void write_register(MfrcRegisters reg) {
+    uint8_t write_register(MfrcRegisters reg, uint8_t value) {
         digitalWrite(ss_pin_, LOW);
 
         spi_.start_transaction(F_CPU / 4, MSB_ORDER, MODE_0);
-        spi_.transfer(static_cast<uint8_t>(reg) << 1);
+        spi_.transfer(static_cast<uint8_t>(reg) << 1); // Write byte 0 which is address
+        auto result = spi_.transfer(value << 1);
         spi_.end_transaction();
     
         digitalWrite(ss_pin_, HIGH);
+        return result;
     }
 };
