@@ -1,4 +1,4 @@
-
+#pragma once
 enum SpiDataOrder : uint8_t {
     LSB_ORDER = 0x01,
     MSB_ORDER = 0x00,
@@ -13,13 +13,20 @@ enum SpiDataMode : uint8_t {
 // TODOS:
 // 1. Interrupt support (especially in a transaction)
 class spi {
-    uint8_t old_spcr{};
-    uint8_t old_spsr{};
+    struct State {
+        uint8_t spcr_reg;
+        uint8_t spsr_reg;
+    };
+    State old_state;
 public:
     spi() = default;
-    void init() {
+    void init(uint32_t rate = F_CPU / 64, SpiDataOrder dorder = MSB_ORDER, SpiDataMode dmode = MODE_0) {
         // SPI Enable and make this controller Master, set speed rate to Fosc / 64
-        SPCR |= (1 << SPE) | (1 << MSTR) | (1 << SPR0);
+        SPCR |= (1 << SPE) | (1 << MSTR);
+        DDRB |= (1 << PB3) | (1 << PB5); // PB3 is MOSI, PB5 is SCK, defined by datasheet
+        set_rate(rate);
+        set_data_order(dorder);
+        set_data_mode(dmode);
 
         // SPCR |= (1 << DORD);
         // CPOL - SCK is low when idle, 1 - high when idle
@@ -27,9 +34,7 @@ public:
         // SPCR |= | (1 << CPOL) | (1 << CPHA);
         // setting up SPI clock rate
         // SPCR |= (1 << SPR1) | (1 << SPR0);
-        // SPSR |= (1 << SPI2X);
-
-        DDRB |= (1 << PB3) | (1 << PB5); // PB3 is MOSI, PB5 is SCK, defined by datasheet
+        // SPSR |= (1 << SPI2X);        
     }
 
     uint8_t transfer(uint8_t val) {
@@ -39,7 +44,7 @@ public:
     }
 
     void set_rate(uint32_t rate) {
-        uint8_t reg_params;
+        uint8_t reg_params; // Contains smth like 00000111
         switch (rate) {
             case F_CPU / 4: reg_params = 0; break;
             case F_CPU / 16: reg_params = 1; break;
@@ -50,8 +55,8 @@ public:
             case F_CPU / 32: reg_params = 6; break;
             default: reg_params = 0; break;
         }
-        SPCR |= (reg_params & 0x03);
-        SPSR |= (reg_params & 0x01);
+        SPCR |= (reg_params & 0b00000011);
+        SPSR |= (reg_params & 0b00000100);
     }
 
     void set_data_order(SpiDataOrder order) {
@@ -63,15 +68,15 @@ public:
     }
 
     void start_transaction(uint32_t rate, SpiDataOrder d_order, SpiDataMode d_mode) {
-        old_spsr = SPSR;
-        old_spcr = SPCR;
+        old_state.spsr_reg = SPSR;
+        old_state.spcr_reg = SPCR;
 
         set_rate(rate);
         set_data_order(d_order);
         set_data_mode(d_mode);
     }
     void end_transaction() {
-        SPSR = old_spsr;
-        SPCR = old_spcr;
+        SPSR = old_state.spsr_reg;
+        SPCR = old_state.spcr_reg;
     }
 };
