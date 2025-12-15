@@ -25,7 +25,7 @@ public:
         delayMicroseconds(5);
         // Power up
         digitalWrite(rst_pin_, HIGH);
-        delayMicroseconds(5); // Oscillator startup delay
+        delay(50); // Oscillator startup delay
 
         // TODO: Parameters, antenna stuff and so on
     }
@@ -59,5 +59,15 @@ private:
 
         digitalWrite(ss_pin_, HIGH);
         return result;
+    }
+
+    void write_register(MfrcRegisters reg) {
+        digitalWrite(ss_pin_, LOW);
+
+        spi_.start_transaction(F_CPU / 4, MSB_ORDER, MODE_0);
+        spi_.transfer(static_cast<uint8_t>(reg) << 1);
+        spi_.end_transaction();
+    
+        digitalWrite(ss_pin_, HIGH);
     }
 };
