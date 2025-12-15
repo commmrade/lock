@@ -63,8 +63,9 @@ public:
         flush_fifo();
 
         // enable antenna
+        setup_antenna();
         set_antenna(true);
-        
+
         // TODO: Parameters, antenna stuff and so on
     }
     bool is_powered() const {
@@ -151,6 +152,10 @@ private:
     void flush_fifo() {
         uint8_t value = 0x80; // Flush buffer bit set
         write_register(FIFOLevelReg, value);
+    }
+
+    void setup_antenna() {
+        // IDC fo rnow
     }
 
     void set_antenna(bool enable) {
