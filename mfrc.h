@@ -184,10 +184,14 @@ private:
     bool picc_reqa() {
         const char reqa_command = 0x26;
         char resp[2]; // ATQA response
+        int resp_size = sizeof(resp);
 
-        bool result = transceive(&reqa_command, 1, resp, sizeof(resp));
+        bool result = transceive(&reqa_command, 1, resp, &resp_size);
         if (!result) {
             return false;
+        }
+        if (resp_size != sizeof(resp)) {
+            return false; // Size is incorrect
         }
 
         // Print response bytes in hex
@@ -197,17 +201,12 @@ private:
             Serial.print((uint8_t)resp[i], HEX);
             Serial.print(' ');
         }
-        Serial.println();
 
-        if ((resp[0] == 0x00 && resp[1] == 0x04) || (resp[0] == 0x00 && resp[1] == 0x02)) {
-            Serial.println("all good");
-            return true;
-        }
-        Serial.println("Not that card");
-        return false;
+        return true;
     }
 
-    bool transceive(const char* send_buf, int send_buf_n, char* recv_buf, int recv_buf_n) {
+    // TODO: return status codes
+    bool transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n) {
         write_register(FIFOLevelReg, 0x80); // Clear fifo buffer
         write_register(ComIrqReg, 0x7F); // нужно сбросить все IRQ-биты
         // TODO: something to do with interrupts?
@@ -216,22 +215,25 @@ private:
             write_register(FIFODataReg, send_buf[i]);
         }
         write_register(CommandReg, Transceive);
-        write_register(BitFramingReg, 0x87); // Start Send bit set, last bits are 7 short frame typa shit
+        write_register(BitFramingReg, 0x87); // Start Send bit set, last 7 is because we need the short frame format
 
-        delay(200); // TODO: Proper delay
+        delay(80); // TODO: Proper delay
         // TODO: Now somehow wait for interrupt that signals read is over or something
         auto inter_bits = read_register(ComIrqReg);
         if (!(inter_bits & 0x30)) { // FAILS HERE FOR SOME REASON
-            Serial.println("Transaction failed");
-            return false; // Failed
+            return false; // Failed (or just no card in the field)
         }
         
-        for (auto i = 0; i < recv_buf_n; ++i) {
+        auto bytes_n = read_register(FIFOLevelReg);
+        if (*recv_buf_n < bytes_n) {
+            return false;
+        }
+
+        *recv_buf_n = bytes_n;
+        for (auto i = 0; i < bytes_n; ++i) {
             auto value = read_register(FIFODataReg);
             recv_buf[i] = value;
         }
-        
-        // TODO: Read response
 
         // Clear transceive command after it is done
         write_register(CommandReg, Idle);
