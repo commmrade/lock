@@ -215,8 +215,8 @@ private:
         for (auto i = 0; i < send_buf_n; ++i) {
             write_register(FIFODataReg, send_buf[i]);
         }
-        write_register(BitFramingReg, 0x87); // Start Send bit set, last bits are 7 short frame typa shit
         write_register(CommandReg, Transceive);
+        write_register(BitFramingReg, 0x87); // Start Send bit set, last bits are 7 short frame typa shit
 
         delay(200); // TODO: Proper delay
         // TODO: Now somehow wait for interrupt that signals read is over or something
