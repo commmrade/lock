@@ -15,12 +15,15 @@ constexpr int LOCKED_PIN = 4; // PORTD
 
 constexpr byte VERIFIED_KEY[]{0x74, 0xE5, 0x86, 0x04};
 
-static Uart0 serial{};
+// static Uart0 serial{};
 static spi spi{};
 static Mfrc_522 mfrc_test{spi};
 
 void setup() {
-    serial.init(9600);
+    Serial.begin(9600);
+    delay(100);
+    Serial.println("Hallo");
+    // serial.init(9600);
     spi.init();
 
     // mfrc.PCD_Init(); // Protocol handshake
@@ -30,11 +33,12 @@ void setup() {
     mfrc_test.init(SS_PIN, RST_PIN);
     delay(10); // Wait a bit so everything is r eady
     auto version = mfrc_test.software_version();
-    serial.println(String{version});
+    Serial.println(version);
+    // serial.println(String{version});
 
     // Pins for LEDs
     // Set those as OUTPUTs
-    // DDRD |= (1 << UNLOCKED_PIN) | (1 << LOCKED_PIN);
+    DDRD |= (1 << UNLOCKED_PIN) | (1 << LOCKED_PIN);
 }
 
 bool card_available() {
@@ -55,6 +59,16 @@ bool try_unlock() {
 }
 
 void loop() {
+    // Serial.println("Pencil");
+    bool available = mfrc_test.is_card_available();
+    if (available) {
+         PORTD |= (1 << UNLOCKED_PIN);
+        delay(1000);
+        // Set to LOW
+        PORTD &= ~(1 << UNLOCKED_PIN);
+        Serial.println("AVAILABLE");
+    }
+    delay(500);
     // bool available = card_available();
     // if (!available) {
     //     return;
