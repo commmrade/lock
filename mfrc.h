@@ -6,6 +6,7 @@
 enum MfrcRegisters : uint8_t {
     CommandReg = 0x01,
     ComIrqReg = 0x04,
+    ErrorReg = 0x06,
     FIFODataReg = 0x09,
     FIFOLevelReg = 0x0A,
     ModeReg = 0x11,
@@ -25,7 +26,9 @@ enum MfrcRegisters : uint8_t {
 #define FIFO_LEVEL_REG_CLEAR 0x80
 #define COM_IRQ_REG_RESET 0x7F
 #define COM_IRQ_REG_RXIRQ_OR_IDLEIRQ 0x30
+#define COM_IRQ_REG_RXIRQ 0x20
 #define COM_IRQ_REG_TXIRQ 0x40
+#define COM_IRQ_REG_ERR 0x2
 #define BIT_FRAM_REG_SS_SF 0x87 // Start Send, Short frame
 #define MODE_REG_DEFAULT 0x3D
 
@@ -176,6 +179,7 @@ public:
 
     // PICC Commands
     // REQA checks if there is a card in the field
+    // TODO: Probably should let user specify ComIrqReq error mask and ErrorReg mask
     Status transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n, uint8_t bitframe) {
         write_register(FIFOLevelReg, FIFO_LEVEL_REG_CLEAR); // Clear fifo buffer
         write_register(ComIrqReg, COM_IRQ_REG_RESET); // нужно сбросить все IRQ-биты, они ресетаютс если 1 записать
@@ -194,16 +198,20 @@ public:
             if (inter_bits & COM_IRQ_REG_RXIRQ_OR_IDLEIRQ) {
                 break; // Received something
             }
-            delay(10);
+            if (inter_bits & 0x01) {
+                return Status::TimedOut; // Timer interrupt
+            }
+            delay(1);
         } while (millis() < end_millis);
-        if (!(inter_bits & COM_IRQ_REG_RXIRQ_OR_IDLEIRQ)) {
+        if ((inter_bits & (COM_IRQ_REG_ERR)) && (inter_bits & COM_IRQ_REG_RXIRQ)) {
+            auto val = read_register(ErrorReg);
+            if (val) {
+                return Status::Error;
+            }
+        } else if (!(inter_bits & COM_IRQ_REG_RXIRQ_OR_IDLEIRQ)) {
             return Status::NoRxInterrupt;
         }
-        if (!(inter_bits & COM_IRQ_REG_TXIRQ)) {
-            // TxIrq - data was not transmitted if bit is not set. 
-            // I think that means that from now on transaction is fucked, so i should either reset or deny transactions
-            return Status::TransactionFailed;
-        }
+        // TODO: Check Error bit flag and then check for errors in ErrorReg
 
         if (millis() >= end_millis) {
             return Status::TimedOut;

@@ -22,11 +22,11 @@ static Mfrc_522 mfrc_test{spi};
 void setup() {
     Serial.begin(9600);
     delay(100);
-    Serial.println("Hello");
+    Serial.println("Starting");
+    delay(500); // Wait a bit so everything is r eady
     // serial.init(9600);
     spi.init();
 
-    delay(10); // Wait a bit so everything is r eady
 
     mfrc_test.init(SS_PIN, RST_PIN);
     delay(10); // Wait a bit so everything is r eady
