@@ -22,7 +22,7 @@ static Mfrc_522 mfrc_test{spi};
 void setup() {
     Serial.begin(9600);
     delay(100);
-    Serial.println("Hallo");
+    Serial.println("Hello");
     // serial.init(9600);
     spi.init();
 
@@ -62,13 +62,12 @@ void loop() {
     // Serial.println("Pencil");
     bool available = mfrc_test.is_card_available();
     if (available) {
-         PORTD |= (1 << UNLOCKED_PIN);
+        PORTD |= (1 << UNLOCKED_PIN);
         delay(1000);
         // Set to LOW
         PORTD &= ~(1 << UNLOCKED_PIN);
         Serial.println("AVAILABLE");
     }
-    delay(500);
     // bool available = card_available();
     // if (!available) {
     //     return;

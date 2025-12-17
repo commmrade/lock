@@ -1,3 +1,4 @@
+#include "HardwareSerial.h"
 #include <stdint.h>
 #include "Arduino.h"
 #include "spi.h"
@@ -196,7 +197,7 @@ private:
 
         // Print response bytes in hex
         Serial.print("ATQA: ");
-        for (int i = 0; i < sizeof(resp); i++) {
+        for (unsigned int i = 0; i < sizeof(resp); i++) {
             if ((uint8_t)resp[i] < 0x10) Serial.print('0'); // leading zero
             Serial.print((uint8_t)resp[i], HEX);
             Serial.print(' ');
@@ -208,8 +209,7 @@ private:
     // TODO: return status codes
     bool transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n) {
         write_register(FIFOLevelReg, 0x80); // Clear fifo buffer
-        write_register(ComIrqReg, 0x7F); // нужно сбросить все IRQ-биты
-        // TODO: something to do with interrupts?
+        write_register(ComIrqReg, 0x7F); // нужно сбросить все IRQ-биты, они ресетаютс если 1 записать
 
         for (auto i = 0; i < send_buf_n; ++i) {
             write_register(FIFODataReg, send_buf[i]);
@@ -217,16 +217,36 @@ private:
         write_register(CommandReg, Transceive);
         write_register(BitFramingReg, 0x87); // Start Send bit set, last 7 is because we need the short frame format
 
-        delay(80); // TODO: Proper delay
-        // TODO: Now somehow wait for interrupt that signals read is over or something
-        auto inter_bits = read_register(ComIrqReg);
-        if (!(inter_bits & 0x30)) { // FAILS HERE FOR SOME REASON
-            return false; // Failed (or just no card in the field)
+
+        unsigned long end_millis = millis() + 50;
+        uint8_t inter_bits = 0;
+        do {
+            inter_bits = read_register(ComIrqReg);
+            if (inter_bits & 0x30) {
+                break; // Received something
+            }
+            delay(10);
+        } while (millis() < end_millis);
+        if (!(inter_bits & 0x30)) {
+            // TODO: How to determine if transaction failed
+            // Serial.println("Didn't get an interrupt");
+            return false; // Didn't get an interrupt
+        }
+        if (!(inter_bits & 0x40)) {
+            // TxIrq - data was not transmitted if bit is not set
+            Serial.println("Failed to transmit data, should abort communication");
+            return false;
+        }
+
+        if (millis() >= end_millis) {
+            Serial.println("Timed out");
+            return false; // timed out
         }
         
         auto bytes_n = read_register(FIFOLevelReg);
         if (*recv_buf_n < bytes_n) {
-            return false;
+            Serial.println("Buffer is too small");
+            return false; // Buffer is too small
         }
 
         *recv_buf_n = bytes_n;
@@ -237,6 +257,7 @@ private:
 
         // Clear transceive command after it is done
         write_register(CommandReg, Idle);
+        // Serial.println("OK");
         return true; // OK
     }
     
