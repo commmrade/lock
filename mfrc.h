@@ -22,10 +22,20 @@ enum MfrcRegisters : uint8_t {
     TReloadRegL = 0x2D,
 };
 
+#define FIFO_LEVEL_REG_CLEAR 0x80
+#define COM_IRQ_REG_RESET 0x7F
+#define COM_IRQ_REG_RXIRQ_OR_IDLEIRQ 0x30
+#define COM_IRQ_REG_TXIRQ 0x40
+#define BIT_FRAM_REG_SS_SF 0x87 // Start Send, Short frame
+#define MODE_REG_DEFAULT 0x3D
+
 enum Commands : uint8_t {
     Idle = 0x0,
     SoftReset = 0xF,
     Transceive = 0xC,
+
+    // iso 1443 stuff
+    REQA = 0x26,
 };
 
 enum Status {
@@ -34,6 +44,7 @@ enum Status {
     TransactionFailed,
     BufferTooSmall,
     TimedOut,
+    Error,
 };
 
 class Mfrc_522 {
@@ -116,14 +127,28 @@ public:
     }
 
     bool is_card_available() {
-        return picc_reqa();
+        auto result = PICC_REQA();
+        if (result == Status::Ok) {
+            return true;
+        }
+        return false;
     }
 
-private:
-    spi& spi_;
-    // TODO: After basic impl of mfrc use raw registers instead of abstract Pin numbers
-    uint8_t ss_pin_;
-    uint8_t rst_pin_;
+    Status PICC_REQA() {
+        const char command = REQA;
+        char resp[2]; // ATQA response
+        int resp_size = sizeof(resp);
+
+        Status ret = transceive(&command, 1, resp, &resp_size, BIT_FRAM_REG_SS_SF);
+        if (ret != Status::Ok) {
+            return ret;
+        }
+        if (resp_size != sizeof(resp)) {
+            return Status::Error;
+        }
+
+        return Status::Ok;
+    }
 
     [[nodiscard]] uint8_t read_register(MfrcRegisters reg) const {
         digitalWrite(ss_pin_, LOW); // poll slave
@@ -149,116 +174,32 @@ private:
         return result;
     }
 
-    void setup_timer() {
-        // * The timer can also be activated automatically to meet any dedicated protocol 
-        // requirements by setting the TModeReg register’s TAuto bit to logic 1 *
-        uint8_t tmodreg_val = 0x8F;
-        write_register(TModeReg, tmodreg_val);
-        uint8_t tprescaler_val = 0xFF;
-        write_register(TPrescalerReg, tprescaler_val);
-
-        uint8_t resetval = 0xFF;
-        write_register(TReloadRegH, resetval);
-        write_register(TReloadRegL, resetval);
-    }
-
-    void setup_crc() {
-        uint8_t value = 0xA3; // PolMFin 0, CRCPreset FFFFh (11)
-        write_register(ModeReg, value);
-    }
-
-    void setup_transmission() {
-        uint8_t value = 0x0; // 106 KBD, crc off
-        write_register(TxModeReg, value);
-
-        uint8_t askreg_val = 0x40; // 100% ASK Modulation
-        write_register(TxASKReg, askreg_val);
-    }
-
-    void setup_reception() {
-        uint8_t value = 0x0; // 106 kbd, "receiver is deactivated after receiving a data frame", CRC OFF
-        write_register(RxModeReg, value);
-    }
-
-    void flush_fifo() {
-        uint8_t value = 0x80; // Flush buffer bit set
-        write_register(FIFOLevelReg, value);
-    }
-
-    void setup_antenna() {
-        // IDC fo rnow
-    }
-
     // PICC Commands
     // REQA checks if there is a card in the field
-    bool picc_reqa() {
-        const char reqa_command = 0x26;
-        char resp[2]; // ATQA response
-        int resp_size = sizeof(resp);
-
-        int ret = transceive(&reqa_command, 1, resp, &resp_size);
-        switch (ret) {
-            case Status::Ok: {
-                break;
-            }
-            case Status::NoRxInterrupt: {
-                return false;
-                break;
-            }
-            case Status::TransactionFailed: {
-                Serial.println("Transaction failed, aborting all following transactions");
-                return false;
-                break;
-            }
-            case Status::BufferTooSmall: {
-                Serial.println("Buffer is too small to fit response");
-                return false;
-                break;
-            }
-            case Status::TimedOut: {
-                // Should I abort following transactions in case of time out
-                Serial.println("Request timed out"); 
-                return false;
-                break;
-            }
-            default: {
-                return false;
-                break;
-            }
-        }
-        if (resp_size != sizeof(resp)) {
-            Serial.println("Resp size is not equal to ATQA");
-            return false;
-        }
-
-        return true;
-    }
-
-    // TODO: return status codes
-    int transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n) {
-        write_register(FIFOLevelReg, 0x80); // Clear fifo buffer
-        write_register(ComIrqReg, 0x7F); // нужно сбросить все IRQ-биты, они ресетаютс если 1 записать
+    Status transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n, uint8_t bitframe) {
+        write_register(FIFOLevelReg, FIFO_LEVEL_REG_CLEAR); // Clear fifo buffer
+        write_register(ComIrqReg, COM_IRQ_REG_RESET); // нужно сбросить все IRQ-биты, они ресетаютс если 1 записать
 
         for (auto i = 0; i < send_buf_n; ++i) {
             write_register(FIFODataReg, send_buf[i]);
         }
         write_register(CommandReg, Transceive);
-        write_register(BitFramingReg, 0x87); // Start Send bit set, last 7 is because we need the short frame format
+        write_register(BitFramingReg, bitframe); // Start Send bit set, last 7 is because we need the short frame format
 
 
         unsigned long end_millis = millis() + 50;
         uint8_t inter_bits = 0;
         do {
             inter_bits = read_register(ComIrqReg);
-            if (inter_bits & 0x30) {
+            if (inter_bits & COM_IRQ_REG_RXIRQ_OR_IDLEIRQ) {
                 break; // Received something
             }
             delay(10);
         } while (millis() < end_millis);
-        if (!(inter_bits & 0x30)) {
+        if (!(inter_bits & COM_IRQ_REG_RXIRQ_OR_IDLEIRQ)) {
             return Status::NoRxInterrupt;
         }
-        if (!(inter_bits & 0x40)) {
+        if (!(inter_bits & COM_IRQ_REG_TXIRQ)) {
             // TxIrq - data was not transmitted if bit is not set. 
             // I think that means that from now on transaction is fucked, so i should either reset or deny transactions
             return Status::TransactionFailed;
@@ -283,26 +224,51 @@ private:
         write_register(CommandReg, Idle);
         return Status::Ok;
     }
-    
-    /*
-    MFRC_REGW(CMD_REG,IDLE); //Clear command register
-    MFRC_REGW(IRQ_REG,0x7F);
-    MFRC_REGW(BITFRAME,0x00);
-    MFRC_REGW(FIFO_LEV,0x80); //Clear FIFO buffer
-    MFRC_FIFOW(sendData,sendsize); //Write data to FIFO ready for transmission
-    //MFRC_FIFOR(FIFO_State, sendsize);
-    //CDC_Transmit_FS(FIFO_State, sendsize);
-    MFRC_REGW(CMD_REG,TRANSCEIVE); //Send FIFO data and receive PICC response
-    MFRC_REGR(BITFRAME,&BIT_val);
-    MFRC_REGW(BITFRAME,(BIT_val|0x80)); //Start send bit
-    HAL_Delay(100);
-    MFRC_REGR(IRQ_REG,&IRQval);
-    if((IRQval&0x30)!=0x30){ //Return error if RXIRQ and IDLEIRQ bits are not set
-        return(HAL_ERROR);
+
+private:
+    spi& spi_;
+    // TODO: After basic impl of mfrc use raw registers instead of abstract Pin numbers
+    uint8_t ss_pin_;
+    uint8_t rst_pin_;
+
+    void setup_timer() {
+        // * The timer can also be activated automatically to meet any dedicated protocol 
+        // requirements by setting the TModeReg register’s TAuto bit to logic 1 *
+        uint8_t tmodreg_val = 0x8F;
+        write_register(TModeReg, tmodreg_val);
+        uint8_t tprescaler_val = 0xFF;
+        write_register(TPrescalerReg, tprescaler_val);
+
+        // Set to max value, since idc about timer
+        uint8_t resetval = 0xFF;
+        write_register(TReloadRegH, resetval);
+        write_register(TReloadRegL, resetval);
     }
 
-    MFRC_FIFOR(recdata,recsize); //Read and store received data
-    return(HAL_OK);
-    
-    */
+    void setup_crc() {
+        uint8_t value = MODE_REG_DEFAULT;
+        write_register(ModeReg, value);
+    }
+
+    void setup_transmission() {
+        uint8_t value = 0x0; // 106 KBD, crc off
+        write_register(TxModeReg, value);
+
+        uint8_t askreg_val = 0x40; // 100% ASK Modulation
+        write_register(TxASKReg, askreg_val);
+    }
+
+    void setup_reception() {
+        uint8_t value = 0x0; // 106 kbd, "receiver is deactivated after receiving a data frame", CRC OFF
+        write_register(RxModeReg, value);
+    }
+
+    void flush_fifo() {
+        uint8_t value = FIFO_LEVEL_REG_CLEAR; // Flush buffer bit set
+        write_register(FIFOLevelReg, value);
+    }
+
+    void setup_antenna() {
+        // IDC fo rnow
+    }
 };

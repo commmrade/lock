@@ -26,9 +26,7 @@ void setup() {
     // serial.init(9600);
     spi.init();
 
-    // mfrc.PCD_Init(); // Protocol handshake
     delay(10); // Wait a bit so everything is r eady
-    // mfrc.PCD_DumpVersionToSerial(); // Dump all the stuff i dotn care about
 
     mfrc_test.init(SS_PIN, RST_PIN);
     delay(10); // Wait a bit so everything is r eady
@@ -41,37 +39,33 @@ void setup() {
     DDRD |= (1 << UNLOCKED_PIN) | (1 << LOCKED_PIN);
 }
 
-bool card_available() {
-    // if (!mfrc.PICC_IsNewCardPresent()) { // Does a REQ to check if there is a card available
-    //     return false;
-    // }
-
-    // // int start = millis();
-    // if (!mfrc.PICC_ReadCardSerial()) { // Reads UID into an internal buffer
-    //     return false;
-    // }
-    return true;
-}
-
 bool try_unlock() {
     // return !memcmp(mfrc.uid.uidByte, VERIFIED_KEY, min(sizeof(VERIFIED_KEY), mfrc.uid.size));
     return false;
 }
 
 void loop() {
-    // Serial.println("Pencil");
-    bool available = mfrc_test.is_card_available();
-    if (available) {
-        PORTD |= (1 << UNLOCKED_PIN);
+    
+    /// Beginner way
+    // bool available = mfrc_test.is_card_available();
+    // if (available) {
+    //     PORTD |= (1 << LOCKED_PIN);
+    //     delay(1000);
+    //     // Set to LOW
+    //     PORTD &= ~(1 << LOCKED_PIN);
+    // }
+    /// Advanced api
+    Status status = mfrc_test.PICC_REQA();
+    if (status == Status::TransactionFailed) {
+        Serial.println("Transactions is fucked, aborting");
+    } else if (status == Status::Ok) {
+        PORTD |= (1 << LOCKED_PIN);
         delay(1000);
         // Set to LOW
-        PORTD &= ~(1 << UNLOCKED_PIN);
-        Serial.println("AVAILABLE");
+        PORTD &= ~(1 << LOCKED_PIN);
     }
-    // bool available = card_available();
-    // if (!available) {
-    //     return;
-    // }
+    /// End
+
 
     // bool is_unlocked = try_unlock();
     // int selected_pin = is_unlocked ? UNLOCKED_PIN : LOCKED_PIN;
@@ -81,5 +75,4 @@ void loop() {
     // delay(1000);
     // // Set to LOW
     // PORTD &= ~(1 << selected_pin);
-
 }
