@@ -28,6 +28,14 @@ enum Commands : uint8_t {
     Transceive = 0xC,
 };
 
+enum Status {
+    Ok,
+    NoRxInterrupt,
+    TransactionFailed,
+    BufferTooSmall,
+    TimedOut,
+};
+
 class Mfrc_522 {
 
 public:
@@ -76,6 +84,8 @@ public:
         // Put into iddle
         write_register(CommandReg, Idle);
     }
+
+
     bool is_powered() const {
         pinMode(rst_pin_, INPUT);
         bool val = digitalRead(rst_pin_);
@@ -114,8 +124,6 @@ private:
     // TODO: After basic impl of mfrc use raw registers instead of abstract Pin numbers
     uint8_t ss_pin_;
     uint8_t rst_pin_;
-
-    bool is_running{false};
 
     [[nodiscard]] uint8_t read_register(MfrcRegisters reg) const {
         digitalWrite(ss_pin_, LOW); // poll slave
@@ -182,32 +190,52 @@ private:
     }
 
     // PICC Commands
+    // REQA checks if there is a card in the field
     bool picc_reqa() {
         const char reqa_command = 0x26;
         char resp[2]; // ATQA response
         int resp_size = sizeof(resp);
 
-        bool result = transceive(&reqa_command, 1, resp, &resp_size);
-        if (!result) {
-            return false;
+        int ret = transceive(&reqa_command, 1, resp, &resp_size);
+        switch (ret) {
+            case Status::Ok: {
+                break;
+            }
+            case Status::NoRxInterrupt: {
+                return false;
+                break;
+            }
+            case Status::TransactionFailed: {
+                Serial.println("Transaction failed, aborting all following transactions");
+                return false;
+                break;
+            }
+            case Status::BufferTooSmall: {
+                Serial.println("Buffer is too small to fit response");
+                return false;
+                break;
+            }
+            case Status::TimedOut: {
+                // Should I abort following transactions in case of time out
+                Serial.println("Request timed out"); 
+                return false;
+                break;
+            }
+            default: {
+                return false;
+                break;
+            }
         }
         if (resp_size != sizeof(resp)) {
-            return false; // Size is incorrect
-        }
-
-        // Print response bytes in hex
-        Serial.print("ATQA: ");
-        for (unsigned int i = 0; i < sizeof(resp); i++) {
-            if ((uint8_t)resp[i] < 0x10) Serial.print('0'); // leading zero
-            Serial.print((uint8_t)resp[i], HEX);
-            Serial.print(' ');
+            Serial.println("Resp size is not equal to ATQA");
+            return false;
         }
 
         return true;
     }
 
     // TODO: return status codes
-    bool transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n) {
+    int transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n) {
         write_register(FIFOLevelReg, 0x80); // Clear fifo buffer
         write_register(ComIrqReg, 0x7F); // нужно сбросить все IRQ-биты, они ресетаютс если 1 записать
 
@@ -228,25 +256,21 @@ private:
             delay(10);
         } while (millis() < end_millis);
         if (!(inter_bits & 0x30)) {
-            // TODO: How to determine if transaction failed
-            // Serial.println("Didn't get an interrupt");
-            return false; // Didn't get an interrupt
+            return Status::NoRxInterrupt;
         }
         if (!(inter_bits & 0x40)) {
-            // TxIrq - data was not transmitted if bit is not set
-            Serial.println("Failed to transmit data, should abort communication");
-            return false;
+            // TxIrq - data was not transmitted if bit is not set. 
+            // I think that means that from now on transaction is fucked, so i should either reset or deny transactions
+            return Status::TransactionFailed;
         }
 
         if (millis() >= end_millis) {
-            Serial.println("Timed out");
-            return false; // timed out
+            return Status::TimedOut;
         }
         
         auto bytes_n = read_register(FIFOLevelReg);
         if (*recv_buf_n < bytes_n) {
-            Serial.println("Buffer is too small");
-            return false; // Buffer is too small
+            return Status::BufferTooSmall;
         }
 
         *recv_buf_n = bytes_n;
@@ -257,8 +281,7 @@ private:
 
         // Clear transceive command after it is done
         write_register(CommandReg, Idle);
-        // Serial.println("OK");
-        return true; // OK
+        return Status::Ok;
     }
     
     /*
