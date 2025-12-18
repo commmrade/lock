@@ -1,3 +1,5 @@
+#include <string.h>
+#include <stddef.h>
 #include "HardwareSerial.h"
 #include <stdint.h>
 #include "Arduino.h"
@@ -30,6 +32,7 @@ enum MfrcRegisters : uint8_t {
 #define COM_IRQ_REG_TXIRQ 0x40
 #define COM_IRQ_REG_ERR 0x2
 #define BIT_FRAM_REG_SS_SF 0x87 // Start Send, Short frame
+#define BIT_FRAM_REG_SS 0x80
 #define MODE_REG_DEFAULT 0x3D
 
 enum Commands : uint8_t {
@@ -39,6 +42,9 @@ enum Commands : uint8_t {
 
     // iso 1443 stuff
     REQA = 0x26,
+    SEL_CL1 = 0x93,
+    SEL_CL2 = 0x95,
+    SEL_CL3 = 0x97,
 };
 
 enum Status {
@@ -126,7 +132,8 @@ public:
 
     void reset() {
         write_register(MfrcRegisters::CommandReg, Commands::SoftReset);
-        delay(50); // Wait for the device to reset fully (may wanna poll here but idc)r
+        // TODO: Wait properly
+        delay(65); // Wait for the device to reset fully (may wanna poll here but idc)
     }
 
     bool is_card_available() {
@@ -135,6 +142,115 @@ public:
             return true;
         }
         return false;
+    }
+
+    [[nodiscard]] uint8_t read_register(MfrcRegisters reg) const {
+        digitalWrite(ss_pin_, LOW); // poll slave
+
+        spi_.start_transaction(F_CPU / 4, MSB_ORDER, MODE_0);
+        spi_.transfer(0x80 | (static_cast<uint8_t>(reg) << 1)); // format is [mode (0 or 1) msb][6 value bits][0 lsb]
+        auto result = spi_.transfer(0);
+        spi_.end_transaction();
+
+        digitalWrite(ss_pin_, HIGH);
+        return result;
+    }
+
+    void read_register(MfrcRegisters reg, uint8_t* buf, size_t bytes_n) {
+        digitalWrite(ss_pin_, LOW);
+        spi_.start_transaction(F_CPU / 4, MSB_ORDER, MODE_0);
+
+        for (size_t i = 0; i < bytes_n; ++i) {
+            spi_.transfer(0x80 | (static_cast<uint8_t>(reg) << 1));
+            buf[i] = spi_.transfer(0x0);
+        }
+
+        spi_.end_transaction();
+        digitalWrite(ss_pin_, HIGH);
+    }
+
+    uint8_t write_register(MfrcRegisters reg, uint8_t value) {
+        digitalWrite(ss_pin_, LOW);
+
+        spi_.start_transaction(F_CPU / 4, MSB_ORDER, MODE_0);
+        spi_.transfer(static_cast<uint8_t>(reg) << 1); // Write byte 0 which is address
+        auto result = spi_.transfer(value);
+        spi_.end_transaction();
+    
+        digitalWrite(ss_pin_, HIGH);
+        return result;
+    }
+
+    void write_register(MfrcRegisters reg, const uint8_t* buf, size_t buf_size) {
+        digitalWrite(ss_pin_, LOW);
+        spi_.start_transaction(F_CPU / 4, MSB_ORDER, MODE_0);
+
+        spi_.transfer(static_cast<uint8_t>(reg) << 1);
+        for (size_t i = 0; i < buf_size; ++i) {
+            spi_.transfer(buf[i]);
+        }
+
+        spi_.end_transaction();
+        digitalWrite(ss_pin_, HIGH);
+    }
+
+    
+
+    // PICC Commands
+    // REQA checks if there is a card in the field
+    // TODO: Probably should let user specify ComIrqReq error mask and ErrorReg mask
+    Status transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n, uint8_t bitframe) {
+        write_register(FIFOLevelReg, FIFO_LEVEL_REG_CLEAR); // Clear fifo buffer
+        write_register(ComIrqReg, COM_IRQ_REG_RESET); // нужно сбросить все IRQ-биты, они ресетаютс если 1 записать
+
+        write_register(FIFODataReg, (const uint8_t*)send_buf, send_buf_n);
+        // for (auto i = 0; i < send_buf_n; ++i) {
+        //     write_register(FIFODataReg, send_buf[i]);
+        // }
+        write_register(CommandReg, Transceive);
+        write_register(BitFramingReg, bitframe); // Start Send bit set, last 7 is because we need the short frame format
+
+
+        unsigned long end_millis = millis() + 100;
+        uint8_t inter_bits = 0;
+        // TODO: Use timer?
+        do {
+            inter_bits = read_register(ComIrqReg);
+            if (inter_bits & COM_IRQ_REG_RXIRQ_OR_IDLEIRQ) {
+                break; // Transceive finished
+            }
+            if (inter_bits & 0x01) {
+                return Status::TimedOut; // Timer interrupt
+            }
+            delay(1);
+        } while (millis() < end_millis);
+        if (!(inter_bits & COM_IRQ_REG_RXIRQ_OR_IDLEIRQ)) {
+            return Status::NoRxInterrupt;
+        }
+        auto val = read_register(ErrorReg);
+        if (val) {
+            return Status::Error;
+        }
+
+        if (millis() >= end_millis) {
+            return Status::TimedOut;
+        }
+        
+        auto bytes_n = read_register(FIFOLevelReg);
+        if (*recv_buf_n < bytes_n) {
+            return Status::BufferTooSmall;
+        }
+
+        *recv_buf_n = bytes_n;
+        read_register(FIFODataReg, (uint8_t*)recv_buf, bytes_n);
+        // for (auto i = 0; i < bytes_n; ++i) {
+        //     auto value = read_register(FIFODataReg);
+        //     recv_buf[i] = value;
+        // }
+
+        // Clear transceive command after it is done
+        write_register(CommandReg, Idle);
+        return Status::Ok;
     }
 
     Status PICC_REQA() {
@@ -153,84 +269,84 @@ public:
         return Status::Ok;
     }
 
-    [[nodiscard]] uint8_t read_register(MfrcRegisters reg) const {
-        digitalWrite(ss_pin_, LOW); // poll slave
+    Status PICC_anticollision_seq() {
+        uint8_t UID_buf[10]{}; // Max uid supported is 10 bytes
+        uint8_t at_response_buf[5]; // 4 uid bytes + 1 bcc
+        int resp_buf_size = sizeof(at_response_buf);
 
-        spi_.start_transaction(F_CPU / 4, MSB_ORDER, MODE_0);
-        spi_.transfer(0x80 | (static_cast<uint8_t>(reg) << 1)); // format is [mode (0 or 1) msb][6 value bits][0 lsb]
-        auto result = spi_.transfer(0);
-        spi_.end_transaction();
+        uint8_t at_send_buf[12]; // max packet size is 7
 
-        digitalWrite(ss_pin_, HIGH);
-        return result;
-    }
+        uint8_t command = SEL_CL1;
+        uint8_t NVB = 0x20; // Initial value
+        at_send_buf[0] = SEL_CL1;
+        at_send_buf[1] = NVB;
 
-    uint8_t write_register(MfrcRegisters reg, uint8_t value) {
-        digitalWrite(ss_pin_, LOW);
+        // UID field is 0 at this point
 
-        spi_.start_transaction(F_CPU / 4, MSB_ORDER, MODE_0);
-        spi_.transfer(static_cast<uint8_t>(reg) << 1); // Write byte 0 which is address
-        auto result = spi_.transfer(value);
-        spi_.end_transaction();
-    
-        digitalWrite(ss_pin_, HIGH);
-        return result;
-    }
-
-    // PICC Commands
-    // REQA checks if there is a card in the field
-    // TODO: Probably should let user specify ComIrqReq error mask and ErrorReg mask
-    Status transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n, uint8_t bitframe) {
-        write_register(FIFOLevelReg, FIFO_LEVEL_REG_CLEAR); // Clear fifo buffer
-        write_register(ComIrqReg, COM_IRQ_REG_RESET); // нужно сбросить все IRQ-биты, они ресетаютс если 1 записать
-
-        for (auto i = 0; i < send_buf_n; ++i) {
-            write_register(FIFODataReg, send_buf[i]);
+        int buf_size = resp_buf_size;
+        Status ret = transceive((const char*)at_send_buf, 2, (char*)at_response_buf, &buf_size, BIT_FRAM_REG_SS);
+        if (ret != Status::Ok) {
+            Serial.print("Fuck off: ");
+            Serial.println(static_cast<uint8_t>(ret));
+            return ret;
         }
-        write_register(CommandReg, Transceive);
-        write_register(BitFramingReg, bitframe); // Start Send bit set, last 7 is because we need the short frame format
+        if (buf_size != 5) {
+            return Status::Error;
+        }
 
+        // Serial.println((const char*)at_response_buf);
+        if (at_response_buf[0] != 0x88) {
+            Serial.println("Starting SELECT");
+            at_send_buf[0] = SEL_CL1;
+            at_send_buf[1] = 0x70; // For select command
+            memcpy(at_send_buf + 2, at_response_buf, 4); // 4 uid bytes + BCC
+            uint8_t bcc = at_response_buf[0] ^ at_response_buf[1] ^ at_response_buf[2] ^ at_response_buf[3];
+            at_send_buf[6] = bcc;
 
-        unsigned long end_millis = millis() + 50;
-        uint8_t inter_bits = 0;
-        do {
-            inter_bits = read_register(ComIrqReg);
-            if (inter_bits & COM_IRQ_REG_RXIRQ_OR_IDLEIRQ) {
-                break; // Received something
-            }
-            if (inter_bits & 0x01) {
-                return Status::TimedOut; // Timer interrupt
-            }
-            delay(1);
-        } while (millis() < end_millis);
-        if ((inter_bits & (COM_IRQ_REG_ERR)) && (inter_bits & COM_IRQ_REG_RXIRQ)) {
-            auto val = read_register(ErrorReg);
-            if (val) {
+            int buf_size = resp_buf_size;
+            uint8_t crc[2];
+            calculate_crc(at_send_buf, 7, crc);
+            at_send_buf[7] = crc[0];
+            at_send_buf[8] = crc[1];
+            
+            // 9 because also CRC 2 bytes
+            Status ret = transceive((const char*)at_send_buf, 9, (char*)at_response_buf, &buf_size, BIT_FRAM_REG_SS);
+            if (ret != Status::Ok) {
+                Serial.print("Select is fucked: ");
+                Serial.println(static_cast<uint8_t>(ret));
+                uint8_t error = read_register(ErrorReg);
+                uint8_t comirq = read_register(ComIrqReg);
+                Serial.print("ErrorReg = 0x"); Serial.println(error, HEX);
+                Serial.print("ComIrqReg = 0x"); Serial.println(comirq, HEX);
                 return Status::Error;
             }
-        } else if (!(inter_bits & COM_IRQ_REG_RXIRQ_OR_IDLEIRQ)) {
-            return Status::NoRxInterrupt;
-        }
-        // TODO: Check Error bit flag and then check for errors in ErrorReg
+            Serial.print("Got from select bytes: ");
+            Serial.println(buf_size);
+            // Select responds with a single byte
+            if (at_response_buf[0] & 0x20) {
+                Serial.println("Cascade bit set in SAK response, damn");
+                return Status::Error; // TODO: Contineu cacsade
+            }
 
-        if (millis() >= end_millis) {
-            return Status::TimedOut;
-        }
-        
-        auto bytes_n = read_register(FIFOLevelReg);
-        if (*recv_buf_n < bytes_n) {
-            return Status::BufferTooSmall;
+            Serial.println("Successfully got UID");
+            // Check cascade flag field
         }
 
-        *recv_buf_n = bytes_n;
-        for (auto i = 0; i < bytes_n; ++i) {
-            auto value = read_register(FIFODataReg);
-            recv_buf[i] = value;
-        }
-
-        // Clear transceive command after it is done
-        write_register(CommandReg, Idle);
         return Status::Ok;
+    }
+
+    void calculate_crc(const uint8_t *data, uint8_t len, uint8_t *result) {
+        write_register(CommandReg, Idle);
+        write_register(DivIrqReg, 0x04);          // очистить CRC IRQ
+        write_register(FIFOLevelReg, 0x80);       // flush
+        write_register(FIFODataReg, data, len);
+        write_register(CommandReg, 0x03);         // CalcCRC
+        uint32_t start = millis();
+        while (!(read_register(DivIrqReg) & 0x04)) {
+            if (millis() - start > 50) break;
+        }
+        result[0] = read_register(CRCResultRegL);
+        result[1] = read_register(CRCResultRegH);
     }
 
 private:

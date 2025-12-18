@@ -21,19 +21,20 @@ static Mfrc_522 mfrc_test{spi};
 
 void setup() {
     Serial.begin(9600);
-    delay(100);
-    Serial.println("Starting");
-    delay(500); // Wait a bit so everything is r eady
+    while (!Serial);
+    // delay(100);
+    // Serial.println("Starting");
+    // delay(500); // Wait a bit so everything is r eady
     // serial.init(9600);
     spi.init();
 
 
     mfrc_test.init(SS_PIN, RST_PIN);
-    delay(10); // Wait a bit so everything is r eady
+    delay(100); // Wait a bit so everything is r eady
     auto version = mfrc_test.software_version();
     Serial.println(version);
     // serial.println(String{version});
-
+    Serial.println("After version");
     // Pins for LEDs
     // Set those as OUTPUTs
     DDRD |= (1 << UNLOCKED_PIN) | (1 << LOCKED_PIN);
@@ -45,7 +46,11 @@ bool try_unlock() {
 }
 
 void loop() {
-    
+    PORTD |= (1 << UNLOCKED_PIN);
+    delay(100);
+    // Set to LOW
+    PORTD &= ~(1 << UNLOCKED_PIN);
+    delay(100);
     /// Beginner way
     // bool available = mfrc_test.is_card_available();
     // if (available) {
@@ -59,6 +64,8 @@ void loop() {
     if (status == Status::TransactionFailed) {
         Serial.println("Transactions is fucked, aborting");
     } else if (status == Status::Ok) {
+        mfrc_test.PICC_anticollision_seq();
+
         PORTD |= (1 << LOCKED_PIN);
         delay(1000);
         // Set to LOW
