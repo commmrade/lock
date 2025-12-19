@@ -58,6 +58,7 @@ enum Status {
     BufferTooSmall,
     TimedOut,
     Error,
+    Collision,
 };
 
 struct Uid {
@@ -142,7 +143,7 @@ public:
     void reset() {
         write_register(MfrcRegisters::CommandReg, Commands::SoftReset);
         // TODO: Wait properly
-        delay(65); // Wait for the device to reset fully (may wanna poll here but idc)
+        delay(50); // Wait for the device to reset fully (may wanna poll here but idc)
     }
 
     bool is_card_available() {
@@ -236,7 +237,9 @@ public:
             return Status::NoRxInterrupt;
         }
         auto val = read_register(ErrorReg);
-        if (val) {
+        if (val & 0x8) { // Collision
+            return Status::Collision;
+        } else if (val) {
             return Status::Error;
         }
 
@@ -288,7 +291,7 @@ public:
         
         uint8_t uid[10]{}; // Buffer for UID
         size_t uid_idx = 0;
-        while (!is_finished || cascade_level <= 3) {
+        while (!is_finished && cascade_level <= 3) {
             uint8_t send_ac_buf[2]{}; // First anticollision request is SEL_CL1 + NVM (0x20 - min value), empty UID
             uint8_t recv_ac_buf[5]{}; // Response is 4 UID bytes + BCC
 
@@ -296,13 +299,33 @@ public:
             send_ac_buf[1] = 0x20;
             size_t recv_size = sizeof(recv_ac_buf);
             Status ret = transceive(send_ac_buf, sizeof(send_ac_buf), recv_ac_buf, &recv_size, BIT_FRAM_REG_SS);
-            if (ret != Status::Ok) {
-                Serial.println("HEre");
+            if (ret != Status::Ok && ret != Status::Collision) {
                 return ret;
+            }
+            if (ret == Status::Collision) {
+                /*
+                    1. Read collision position register (TRF796x).(1)(2)
+                    2. Determine the number of valid bytes and bits.
+                    3. Read the valid received bytes and bits in FIFO and write to local
+                    buffer.
+                    4. Reset FIFO
+                */
+                // uint8_t coll_info = read_register(CollReg);
+                // if (coll_info & 0x20) { // Collision pos not valid
+                //     return Status::Error;
+                // }
+                // uint8_t coll_pos = coll_info & 0x0F;
+                // if (coll_pos == 0) {
+                //     coll_pos = 32;
+                // }
+
+                // uint8_t known_bytes = (coll_pos - 1) / 8;
+                // uint8_t known_bits = (coll_pos - 1) % 8;
+
+                return Status::Error; // Erro for now
             }
 
             if (recv_size != 5) {
-                Serial.println("Incorrect SEL_CL1 Response size");
                 return Status::Error;
             }
 
