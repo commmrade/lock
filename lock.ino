@@ -27,59 +27,23 @@ void setup() {
     delay(100); // Wait a bit so everything is r eady
     auto version = mfrc_test.software_version();
     Serial.println(version);
-
     DDRD |= (1 << UNLOCKED_PIN) | (1 << LOCKED_PIN);
 }
 
-bool try_unlock() {
-    // return !memcmp(mfrc.uid.uidByte, VERIFIED_KEY, min(sizeof(VERIFIED_KEY), mfrc.uid.size));
-    return false;
-}
 
 void loop() {
-    PORTD |= (1 << UNLOCKED_PIN);
-    delay(100);
-    // Set to LOW
-    PORTD &= ~(1 << UNLOCKED_PIN);
-    delay(100);
-    /// Beginner way
-    // bool available = mfrc_test.is_card_available();
-    // if (available) {
-    //     PORTD |= (1 << LOCKED_PIN);
-    //     delay(1000);
-    //     // Set to LOW
-    //     PORTD &= ~(1 << LOCKED_PIN);
-    // }
-    /// Advanced api
     Status status = mfrc_test.PICC_REQA();
     if (status == Status::TransactionFailed) {
         Serial.println("Transactions is fucked, aborting");
     } else if (status == Status::Ok) {
         Uid uid;
         if (mfrc_test.card_uid(uid)) {
-            Serial.print("Card UID: ");
-            for (size_t i = 0; i < uid.actual_size; ++i) {
-                Serial.print(uid.uid[i], HEX);
-                Serial.print(" ");
-            }
-            Serial.println("");
+            bool is_unlocked = !memcmp(uid.uid, VERIFIED_KEY, uid.actual_size);
+            int pin = is_unlocked ? UNLOCKED_PIN : LOCKED_PIN;
+            PORTD |= (1 << pin);
+            delay(1000);
+            // Set to LOW
+            PORTD &= ~(1 << pin);
         }
-
-
-        PORTD |= (1 << LOCKED_PIN);
-        delay(1000);
-        // Set to LOW
-        PORTD &= ~(1 << LOCKED_PIN);
     }
-    /// End
-
-
-    // bool is_unlocked = try_unlock();
-    // int selected_pin = is_unlocked ? UNLOCKED_PIN : LOCKED_PIN;
-    
-    // // set to HIGH
-    // PORTD |= (1 << selected_pin);
-    // delay(1000);
-    // // Set to LOW
-    // PORTD &= ~(1 << selected_pin);
 }

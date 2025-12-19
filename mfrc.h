@@ -157,7 +157,6 @@ public:
     bool card_uid(Uid& uid) {
         Status result = PICC_anticollision(uid.uid, &uid.actual_size);
         if (result != Status::Ok) {
-            Serial.println((int)result);
             return false;
         }
         return true;
