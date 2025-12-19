@@ -160,19 +160,6 @@ public:
         return result;
     }
 
-    void read_register(MfrcRegisters reg, uint8_t* buf, size_t bytes_n) {
-        digitalWrite(ss_pin_, LOW);
-        spi_.start_transaction(F_CPU / 4, MSB_ORDER, MODE_0);
-
-        for (size_t i = 0; i < bytes_n; ++i) {
-            spi_.transfer(0x80 | (static_cast<uint8_t>(reg) << 1));
-            buf[i] = spi_.transfer(0x0);
-        }
-
-        spi_.end_transaction();
-        digitalWrite(ss_pin_, HIGH);
-    }
-
     uint8_t write_register(MfrcRegisters reg, uint8_t value) {
         digitalWrite(ss_pin_, LOW);
 
@@ -210,11 +197,7 @@ public:
         write_register(ComIrqReg, COM_IRQ_REG_RESET); // нужно сбросить все IRQ-биты, они ресетаютс если 1 записать
         
         write_register(FIFODataReg, (const uint8_t*)send_buf, send_buf_n);
-        // for (auto i = 0; i < send_buf_n; ++i) {
-        //     write_register(FIFODataReg, send_buf[i]);
-        // }
         write_register(CommandReg, Transceive);
-        
         write_register(BitFramingReg, bitframe); // Start Send bit set, last 7 is because we need the short frame format
 
 
@@ -251,11 +234,10 @@ public:
         }
 
         *recv_buf_n = bytes_n;
-        read_register(FIFODataReg, (uint8_t*)recv_buf, bytes_n);
-        // for (auto i = 0; i < bytes_n; ++i) {
-        //     auto value = read_register(FIFODataReg);
-        //     recv_buf[i] = value;
-        // }
+        for (auto i = 0; i < bytes_n; ++i) {
+            auto value = read_register(FIFODataReg);
+            recv_buf[i] = value;
+        }
 
         // Clear transceive command after it is done
         write_register(CommandReg, Idle);
@@ -307,6 +289,15 @@ public:
         if (buf_size != 5) {
             return Status::Error;
         }
+
+        Serial.print("===");
+        for (auto i = 0; i < 4; ++i) {
+            Serial.print("0x");
+            Serial.print(at_response_buf[i], HEX);
+            Serial.print(" ");
+        }
+        Serial.print("===");
+
         delay(100);
         // Serial.println((const char*)at_response_buf);
         if (at_response_buf[0] != 0x88) {
