@@ -8,6 +8,7 @@
 enum MfrcRegisters : uint8_t {
     CommandReg = 0x01,
     ComIrqReg = 0x04,
+    DivIrqReg = 0x05,
     ErrorReg = 0x06,
     FIFODataReg = 0x09,
     FIFOLevelReg = 0x0A,
@@ -17,6 +18,9 @@ enum MfrcRegisters : uint8_t {
     TxControlReg = 0x14,
     TxASKReg = 0x15,
     TxSelReg = 0x16,
+    CollReg = 0x0E,
+    CRCResultRegH = 0x21,
+    CRCResultRegL = 0x22,
     VersionReg = 0x37,
     TModeReg = 0x2A,
     TPrescalerReg = 0x2B,
@@ -200,18 +204,21 @@ public:
     // REQA checks if there is a card in the field
     // TODO: Probably should let user specify ComIrqReq error mask and ErrorReg mask
     Status transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n, uint8_t bitframe) {
+        write_register(CommandReg, Idle);
+        write_register(BitFramingReg, 0x00);
         write_register(FIFOLevelReg, FIFO_LEVEL_REG_CLEAR); // Clear fifo buffer
         write_register(ComIrqReg, COM_IRQ_REG_RESET); // нужно сбросить все IRQ-биты, они ресетаютс если 1 записать
-
+        
         write_register(FIFODataReg, (const uint8_t*)send_buf, send_buf_n);
         // for (auto i = 0; i < send_buf_n; ++i) {
         //     write_register(FIFODataReg, send_buf[i]);
         // }
         write_register(CommandReg, Transceive);
+        
         write_register(BitFramingReg, bitframe); // Start Send bit set, last 7 is because we need the short frame format
 
 
-        unsigned long end_millis = millis() + 100;
+        unsigned long end_millis = millis() + 500;
         uint8_t inter_bits = 0;
         // TODO: Use timer?
         do {
@@ -224,6 +231,10 @@ public:
             }
             delay(1);
         } while (millis() < end_millis);
+        if (millis() >= end_millis) {
+            return Status::TimedOut;
+        }
+
         if (!(inter_bits & COM_IRQ_REG_RXIRQ_OR_IDLEIRQ)) {
             return Status::NoRxInterrupt;
         }
@@ -232,9 +243,7 @@ public:
             return Status::Error;
         }
 
-        if (millis() >= end_millis) {
-            return Status::TimedOut;
-        }
+        
         
         auto bytes_n = read_register(FIFOLevelReg);
         if (*recv_buf_n < bytes_n) {
@@ -269,20 +278,25 @@ public:
         return Status::Ok;
     }
 
+    void clear_register_bitmask(MfrcRegisters reg, uint8_t mask) {
+        uint8_t v = read_register(reg);
+        v &= ~mask;
+        write_register(reg, v);
+    }
+
+
     Status PICC_anticollision_seq() {
         uint8_t UID_buf[10]{}; // Max uid supported is 10 bytes
-        uint8_t at_response_buf[5]; // 4 uid bytes + 1 bcc
+        uint8_t at_response_buf[9]; // 4 uid bytes + 1 bcc
         int resp_buf_size = sizeof(at_response_buf);
 
-        uint8_t at_send_buf[12]; // max packet size is 7
+        uint8_t at_send_buf[20]; // max packet size is 7
 
-        uint8_t command = SEL_CL1;
-        uint8_t NVB = 0x20; // Initial value
         at_send_buf[0] = SEL_CL1;
-        at_send_buf[1] = NVB;
+        at_send_buf[1] = 0x20;
 
         // UID field is 0 at this point
-
+        clear_register_bitmask(CollReg, 0x80); // ValuesAfterColl = 1 (как делают библиотеки)
         int buf_size = resp_buf_size;
         Status ret = transceive((const char*)at_send_buf, 2, (char*)at_response_buf, &buf_size, BIT_FRAM_REG_SS);
         if (ret != Status::Ok) {
@@ -310,7 +324,11 @@ public:
             at_send_buf[8] = crc[1];
             
             // 9 because also CRC 2 bytes
-            Status ret = transceive((const char*)at_send_buf, 9, (char*)at_response_buf, &buf_size, BIT_FRAM_REG_SS);
+            clear_register_bitmask(CollReg, 0x80); // ValuesAfterColl = 1 (как делают библиотеки)
+            uint8_t rfc = read_register(static_cast<MfrcRegisters>(0x26));
+            rfc |= (0x07 << 4); // RxGain = 111 -> максимальное усиление 48 dB
+            write_register(static_cast<MfrcRegisters>(0x26), rfc);
+            Status ret = transceive((const char*)at_send_buf, 7, (char*)at_response_buf, &buf_size, BIT_FRAM_REG_SS);
             if (ret != Status::Ok) {
                 Serial.print("Select is fucked: ");
                 Serial.println(static_cast<uint8_t>(ret));
@@ -318,6 +336,8 @@ public:
                 uint8_t comirq = read_register(ComIrqReg);
                 Serial.print("ErrorReg = 0x"); Serial.println(error, HEX);
                 Serial.print("ComIrqReg = 0x"); Serial.println(comirq, HEX);
+                uint8_t fifolevel = read_register(FIFOLevelReg);
+                Serial.print("FifoLevelReg = "); Serial.println(fifolevel);
                 return Status::Error;
             }
             Serial.print("Got from select bytes: ");
@@ -345,6 +365,7 @@ public:
         while (!(read_register(DivIrqReg) & 0x04)) {
             if (millis() - start > 50) break;
         }
+
         result[0] = read_register(CRCResultRegL);
         result[1] = read_register(CRCResultRegH);
     }
