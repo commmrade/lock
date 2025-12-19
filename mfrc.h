@@ -218,7 +218,7 @@ public:
         write_register(BitFramingReg, bitframe); // Start Send bit set, last 7 is because we need the short frame format
 
 
-        unsigned long end_millis = millis() + 500;
+        unsigned long end_millis = millis() + 50;
         uint8_t inter_bits = 0;
         // TODO: Use timer?
         do {
@@ -307,7 +307,7 @@ public:
         if (buf_size != 5) {
             return Status::Error;
         }
-
+        delay(100);
         // Serial.println((const char*)at_response_buf);
         if (at_response_buf[0] != 0x88) {
             Serial.println("Starting SELECT");
@@ -328,7 +328,7 @@ public:
             uint8_t rfc = read_register(static_cast<MfrcRegisters>(0x26));
             rfc |= (0x07 << 4); // RxGain = 111 -> максимальное усиление 48 dB
             write_register(static_cast<MfrcRegisters>(0x26), rfc);
-            Status ret = transceive((const char*)at_send_buf, 7, (char*)at_response_buf, &buf_size, BIT_FRAM_REG_SS);
+            Status ret = transceive((const char*)at_send_buf, 9, (char*)at_response_buf, &buf_size, BIT_FRAM_REG_SS);
             if (ret != Status::Ok) {
                 Serial.print("Select is fucked: ");
                 Serial.println(static_cast<uint8_t>(ret));
