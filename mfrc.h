@@ -122,7 +122,7 @@ public:
         pinMode(rst_pin_, OUTPUT);
         return val;
     }
-    
+
     int software_version() const {
         auto version = read_register(VersionReg);
         return version;
@@ -181,7 +181,7 @@ public:
         spi_.transfer(static_cast<uint8_t>(reg) << 1); // Write byte 0 which is address
         auto result = spi_.transfer(value);
         spi_.end_transaction();
-    
+
         digitalWrite(ss_pin_, HIGH);
         return result;
     }
@@ -199,7 +199,7 @@ public:
         digitalWrite(ss_pin_, HIGH);
     }
 
-    
+
 
     // PICC Commands
     // REQA checks if there is a card in the field
@@ -209,7 +209,7 @@ public:
         write_register(BitFramingReg, 0x00);
         write_register(FIFOLevelReg, FIFO_LEVEL_REG_CLEAR); // Clear fifo buffer
         write_register(ComIrqReg, COM_IRQ_REG_RESET); // нужно сбросить все IRQ-биты, они ресетаютс если 1 записать
-        
+
         write_register(FIFODataReg, (const uint8_t*)send_buf, send_buf_n);
         write_register(CommandReg, Transceive);
         write_register(BitFramingReg, bitframe); // Start Send bit set, last 7 is because we need the short frame format
@@ -242,8 +242,8 @@ public:
             return Status::Error;
         }
 
-        
-        
+
+
         auto bytes_n = read_register(FIFOLevelReg);
         if (*recv_buf_n < bytes_n) {
             return Status::BufferTooSmall;
@@ -287,14 +287,14 @@ public:
         // TODO: Handle collisions
         bool is_finished = false;
         int cascade_level = 1;
-        
+
         uint8_t uid[10]{}; // Buffer for UID
         size_t uid_idx = 0;
         while (!is_finished && cascade_level <= 3) {
             uint8_t send_ac_buf[2]{}; // First anticollision request is SEL_CL1 + NVM (0x20 - min value), empty UID
             uint8_t recv_ac_buf[5]{}; // Response is 4 UID bytes + BCC
 
-            send_ac_buf[0] = 0x93 + ((cascade_level - 1) * 2);
+            send_ac_buf[0] = (int)SEL_CL1 + ((cascade_level - 1) * 2);
             send_ac_buf[1] = 0x20;
             size_t recv_size = sizeof(recv_ac_buf);
             Status ret = transceive(send_ac_buf, sizeof(send_ac_buf), recv_ac_buf, &recv_size, BIT_FRAM_REG_SS);
@@ -396,7 +396,7 @@ private:
     uint8_t rst_pin_;
 
     void setup_timer() {
-        // * The timer can also be activated automatically to meet any dedicated protocol 
+        // * The timer can also be activated automatically to meet any dedicated protocol
         // requirements by setting the TModeReg register’s TAuto bit to logic 1 *
         uint8_t tmodreg_val = 0x8F;
         write_register(TModeReg, tmodreg_val);
