@@ -55,7 +55,16 @@ void loop() {
     if (status == Status::TransactionFailed) {
         Serial.println("Transactions is fucked, aborting");
     } else if (status == Status::Ok) {
-        mfrc_test.PICC_anticollision_seq();
+        Uid uid;
+        if (mfrc_test.card_uid(uid)) {
+            Serial.print("Card UID: ");
+            for (size_t i = 0; i < uid.actual_size; ++i) {
+                Serial.print(uid.uid[i], HEX);
+                Serial.print(" ");
+            }
+            Serial.println("");
+        }
+
 
         PORTD |= (1 << LOCKED_PIN);
         delay(1000);

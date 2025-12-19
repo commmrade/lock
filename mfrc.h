@@ -60,6 +60,11 @@ enum Status {
     Error,
 };
 
+struct Uid {
+    uint8_t uid[10]{};
+    size_t actual_size{};
+};
+
 class Mfrc_522 {
 
 public:
@@ -148,6 +153,15 @@ public:
         return false;
     }
 
+    bool card_uid(Uid& uid) {
+        Status result = PICC_anticollision(uid.uid, &uid.actual_size);
+        if (result != Status::Ok) {
+            Serial.println((int)result);
+            return false;
+        }
+        return true;
+    }
+
     [[nodiscard]] uint8_t read_register(MfrcRegisters reg) const {
         digitalWrite(ss_pin_, LOW); // poll slave
 
@@ -190,7 +204,7 @@ public:
     // PICC Commands
     // REQA checks if there is a card in the field
     // TODO: Probably should let user specify ComIrqReq error mask and ErrorReg mask
-    Status transceive(const char* send_buf, int send_buf_n, char* recv_buf, int* recv_buf_n, uint8_t bitframe) {
+    Status transceive(const uint8_t* send_buf, size_t send_buf_n, uint8_t* recv_buf, size_t* recv_buf_n, uint8_t bitframe) {
         write_register(CommandReg, Idle);
         write_register(BitFramingReg, 0x00);
         write_register(FIFOLevelReg, FIFO_LEVEL_REG_CLEAR); // Clear fifo buffer
@@ -245,9 +259,9 @@ public:
     }
 
     Status PICC_REQA() {
-        const char command = REQA;
-        char resp[2]; // ATQA response
-        int resp_size = sizeof(resp);
+        const uint8_t command = REQA;
+        uint8_t resp[2]; // ATQA response
+        size_t resp_size = sizeof(resp);
 
         Status ret = transceive(&command, 1, resp, &resp_size, BIT_FRAM_REG_SS_SF);
         if (ret != Status::Ok) {
@@ -267,79 +281,75 @@ public:
     }
 
 
-    Status PICC_anticollision_seq() {
-
+    Status PICC_anticollision(uint8_t* result, size_t* result_size) {
+        // TODO: Handle collisions
         bool is_finished = false;
         int cascade_level = 1;
         
         uint8_t uid[10]{}; // Buffer for UID
         size_t uid_idx = 0;
-        while (!is_finished) {
-            if (cascade_level == 1) {
-                uint8_t send_ac_buf[2]{}; // First anticollision request is SEL_CL1 + NVM (0x20 - min value), empty UID
-                uint8_t recv_ac_buf[5]{}; // Response is 4 UID bytes + BCC
+        while (!is_finished || cascade_level <= 3) {
+            uint8_t send_ac_buf[2]{}; // First anticollision request is SEL_CL1 + NVM (0x20 - min value), empty UID
+            uint8_t recv_ac_buf[5]{}; // Response is 4 UID bytes + BCC
 
-                send_ac_buf[0] = SEL_CL1;
-                send_ac_buf[1] = 0x20;
-                int buf_size = sizeof(send_ac_buf);
-                int recv_size = sizeof(recv_ac_buf);
-                Status ret = transceive((const char*)send_ac_buf, sizeof(send_ac_buf), (char*)recv_ac_buf, &recv_size, BIT_FRAM_REG_SS);
-                if (ret != Status::Ok) {
-                    return ret;
-                }
+            send_ac_buf[0] = 0x93 + ((cascade_level - 1) * 2);
+            send_ac_buf[1] = 0x20;
+            size_t recv_size = sizeof(recv_ac_buf);
+            Status ret = transceive(send_ac_buf, sizeof(send_ac_buf), recv_ac_buf, &recv_size, BIT_FRAM_REG_SS);
+            if (ret != Status::Ok) {
+                Serial.println("HEre");
+                return ret;
+            }
 
-                if (recv_size != 5) {
-                    Serial.println("Incorrect SEL_CL1 Response size");
-                    return Status::Error;
-                }
+            if (recv_size != 5) {
+                Serial.println("Incorrect SEL_CL1 Response size");
+                return Status::Error;
+            }
 
-                uint8_t send_buf[9]{}; // SEL_CL1 + NVM (0x70 - for SELECT), 4 UID bytes, BCC, 2 CRC bytes
-                uint8_t recv_buf[3]{}; // SAK byte + 2 CRC
-                send_buf[0] = SEL_CL1;
-                send_buf[1] = 0x70;
-                memcpy(send_buf + 2, recv_ac_buf, 4); // 4 uid bytes
-                send_buf[6] = send_buf[2] ^ send_buf[3] ^ send_buf[4] ^ send_buf[5];
+            uint8_t bcc = recv_ac_buf[0] ^ recv_ac_buf[1] ^ recv_ac_buf[2] ^ recv_ac_buf[3];
+            if (bcc != recv_ac_buf[4]) { // Invalid BCC
+                return Status::Error;
+            }
 
-                uint8_t crc[2]{};
-                calculate_crc(send_buf, 7, crc);
+            uint8_t send_buf[9]{}; // SEL_CL1 + NVM (0x70 - for SELECT), 4 UID bytes, BCC, 2 CRC bytes
+            uint8_t recv_buf[3]{}; // SAK byte + 2 CRC
+            send_buf[0] = 0x93 + ((cascade_level - 1) * 2);
+            send_buf[1] = 0x70;
+            memcpy(send_buf + 2, recv_ac_buf, 4); // 4 uid bytes
+            send_buf[6] = send_buf[2] ^ send_buf[3] ^ send_buf[4] ^ send_buf[5];
 
-                send_buf[7] = crc[0];
-                send_buf[8] = crc[1];
+            uint8_t crc[2]{};
+            calculate_crc(send_buf, 7, crc);
 
-                recv_size = sizeof(recv_buf);
+            send_buf[7] = crc[0];
+            send_buf[8] = crc[1];
 
-                ret = transceive((const char*)send_buf, sizeof(send_buf), (char*)recv_buf, &recv_size, BIT_FRAM_REG_SS);
-                if (ret != Status::Ok) {
-                    return ret;
-                }
+            recv_size = sizeof(recv_buf);
 
-                if (recv_size != 3) {
-                    return Status::Error;
-                }
+            ret = transceive(send_buf, sizeof(send_buf), recv_buf, &recv_size, BIT_FRAM_REG_SS);
+            if (ret != Status::Ok) {
+                return ret;
+            }
 
-                if (recv_ac_buf[0] != 0x88) {
-                    memcpy(uid + uid_idx, send_buf + 2, 4);
-                    uid_idx += 4;
-                } else {
-                    memcpy(uid + uid_idx, send_buf + 3, 3);
-                    uid_idx += 3;
-                }
+            if (recv_size != 3) {
+                return Status::Error;
+            }
 
-                if (recv_buf[0] & 0x04) { // Cascade bit || first byte is 0x88
-                    cascade_level = 2;
-                } else {
-                    Serial.println("GOT UID");
-                    return Status::Ok;
-                }
-            } else if (cascade_level == 2) {
-                // uint8_t send_buf
+            if (recv_buf[0] & 0x04) { // Cascade bit
+                Serial.println("Cscade");
+                memcpy(uid + uid_idx, send_buf + 3, 3);
+                uid_idx += 3;
+                ++cascade_level;
+            } else {
+                memcpy(uid + uid_idx, send_buf + 2, 4);
+                uid_idx += 4;
+                break;
             }
         }
+
+        memcpy(result, uid, uid_idx);
+        *result_size = uid_idx;
         return Status::Ok;
-
-     
-
-        // return Status::Ok;
     }
 
     void calculate_crc(const uint8_t *data, uint8_t len, uint8_t *result) {
