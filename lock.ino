@@ -26,6 +26,10 @@ void setup() {
     mfrc_test.init(SS_PIN, RST_PIN);
     delay(100); // Wait a bit so everything is r eady
     auto version = mfrc_test.software_version();
+    if (version == 0x00 || version == 0xFF) {
+        Serial.println("Communication is screwed up");
+        return;
+    }
     Serial.println(version);
     DDRD |= (1 << UNLOCKED_PIN) | (1 << LOCKED_PIN);
 }
