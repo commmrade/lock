@@ -268,82 +268,78 @@ public:
 
 
     Status PICC_anticollision_seq() {
-        uint8_t UID_buf[10]{}; // Max uid supported is 10 bytes
-        uint8_t at_response_buf[9]; // 4 uid bytes + 1 bcc
-        int resp_buf_size = sizeof(at_response_buf);
 
-        uint8_t at_send_buf[20]; // max packet size is 7
+        bool is_finished = false;
+        int cascade_level = 1;
+        
+        uint8_t uid[10]{}; // Buffer for UID
+        size_t uid_idx = 0;
+        while (!is_finished) {
+            if (cascade_level == 1) {
+                uint8_t send_ac_buf[2]{}; // First anticollision request is SEL_CL1 + NVM (0x20 - min value), empty UID
+                uint8_t recv_ac_buf[5]{}; // Response is 4 UID bytes + BCC
 
-        at_send_buf[0] = SEL_CL1;
-        at_send_buf[1] = 0x20;
+                send_ac_buf[0] = SEL_CL1;
+                send_ac_buf[1] = 0x20;
+                int buf_size = sizeof(send_ac_buf);
+                int recv_size = sizeof(recv_ac_buf);
+                Status ret = transceive((const char*)send_ac_buf, sizeof(send_ac_buf), (char*)recv_ac_buf, &recv_size, BIT_FRAM_REG_SS);
+                if (ret != Status::Ok) {
+                    return ret;
+                }
 
-        // UID field is 0 at this point
-        clear_register_bitmask(CollReg, 0x80); // ValuesAfterColl = 1 (как делают библиотеки)
-        int buf_size = resp_buf_size;
-        Status ret = transceive((const char*)at_send_buf, 2, (char*)at_response_buf, &buf_size, BIT_FRAM_REG_SS);
-        if (ret != Status::Ok) {
-            Serial.print("Fuck off: ");
-            Serial.println(static_cast<uint8_t>(ret));
-            return ret;
-        }
-        if (buf_size != 5) {
-            return Status::Error;
-        }
+                if (recv_size != 5) {
+                    Serial.println("Incorrect SEL_CL1 Response size");
+                    return Status::Error;
+                }
 
-        Serial.print("===");
-        for (auto i = 0; i < 4; ++i) {
-            Serial.print("0x");
-            Serial.print(at_response_buf[i], HEX);
-            Serial.print(" ");
-        }
-        Serial.print("===");
+                uint8_t send_buf[9]{}; // SEL_CL1 + NVM (0x70 - for SELECT), 4 UID bytes, BCC, 2 CRC bytes
+                uint8_t recv_buf[3]{}; // SAK byte + 2 CRC
+                send_buf[0] = SEL_CL1;
+                send_buf[1] = 0x70;
+                memcpy(send_buf + 2, recv_ac_buf, 4); // 4 uid bytes
+                send_buf[6] = send_buf[2] ^ send_buf[3] ^ send_buf[4] ^ send_buf[5];
 
-        delay(100);
-        // Serial.println((const char*)at_response_buf);
-        if (at_response_buf[0] != 0x88) {
-            Serial.println("Starting SELECT");
-            at_send_buf[0] = SEL_CL1;
-            at_send_buf[1] = 0x70; // For select command
-            memcpy(at_send_buf + 2, at_response_buf, 4); // 4 uid bytes + BCC
-            uint8_t bcc = at_response_buf[0] ^ at_response_buf[1] ^ at_response_buf[2] ^ at_response_buf[3];
-            at_send_buf[6] = bcc;
+                uint8_t crc[2]{};
+                calculate_crc(send_buf, 7, crc);
 
-            int buf_size = resp_buf_size;
-            uint8_t crc[2];
-            calculate_crc(at_send_buf, 7, crc);
-            at_send_buf[7] = crc[0];
-            at_send_buf[8] = crc[1];
-            
-            // 9 because also CRC 2 bytes
-            clear_register_bitmask(CollReg, 0x80); // ValuesAfterColl = 1 (как делают библиотеки)
-            uint8_t rfc = read_register(static_cast<MfrcRegisters>(0x26));
-            rfc |= (0x07 << 4); // RxGain = 111 -> максимальное усиление 48 dB
-            write_register(static_cast<MfrcRegisters>(0x26), rfc);
-            Status ret = transceive((const char*)at_send_buf, 9, (char*)at_response_buf, &buf_size, BIT_FRAM_REG_SS);
-            if (ret != Status::Ok) {
-                Serial.print("Select is fucked: ");
-                Serial.println(static_cast<uint8_t>(ret));
-                uint8_t error = read_register(ErrorReg);
-                uint8_t comirq = read_register(ComIrqReg);
-                Serial.print("ErrorReg = 0x"); Serial.println(error, HEX);
-                Serial.print("ComIrqReg = 0x"); Serial.println(comirq, HEX);
-                uint8_t fifolevel = read_register(FIFOLevelReg);
-                Serial.print("FifoLevelReg = "); Serial.println(fifolevel);
-                return Status::Error;
+                send_buf[7] = crc[0];
+                send_buf[8] = crc[1];
+
+                recv_size = sizeof(recv_buf);
+
+                ret = transceive((const char*)send_buf, sizeof(send_buf), (char*)recv_buf, &recv_size, BIT_FRAM_REG_SS);
+                if (ret != Status::Ok) {
+                    return ret;
+                }
+
+                if (recv_size != 3) {
+                    return Status::Error;
+                }
+
+                if (recv_ac_buf[0] != 0x88) {
+                    memcpy(uid + uid_idx, send_buf + 2, 4);
+                    uid_idx += 4;
+                } else {
+                    memcpy(uid + uid_idx, send_buf + 3, 3);
+                    uid_idx += 3;
+                }
+
+                if (recv_buf[0] & 0x04) { // Cascade bit || first byte is 0x88
+                    cascade_level = 2;
+                } else {
+                    Serial.println("GOT UID");
+                    return Status::Ok;
+                }
+            } else if (cascade_level == 2) {
+                // uint8_t send_buf
             }
-            Serial.print("Got from select bytes: ");
-            Serial.println(buf_size);
-            // Select responds with a single byte
-            if (at_response_buf[0] & 0x20) {
-                Serial.println("Cascade bit set in SAK response, damn");
-                return Status::Error; // TODO: Contineu cacsade
-            }
-
-            Serial.println("Successfully got UID");
-            // Check cascade flag field
         }
-
         return Status::Ok;
+
+     
+
+        // return Status::Ok;
     }
 
     void calculate_crc(const uint8_t *data, uint8_t len, uint8_t *result) {
@@ -408,3 +404,13 @@ private:
         // IDC fo rnow
     }
 };
+
+  // Serial.println("Error transceiving");
+                        // Serial.print("Select is fucked: ");
+                        // Serial.println(static_cast<uint8_t>(ret));
+                        // uint8_t error = read_register(ErrorReg);
+                        // uint8_t comirq = read_register(ComIrqReg);
+                        // Serial.print("ErrorReg = 0x"); Serial.println(error, HEX);
+                        // Serial.print("ComIrqReg = 0x"); Serial.println(comirq, HEX);
+                        // uint8_t fifolevel = read_register(FIFOLevelReg);
+                        // Serial.print("FifoLevelReg = "); Serial.println(fifolevel);
